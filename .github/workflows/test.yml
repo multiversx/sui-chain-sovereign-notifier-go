@@ -1,0 +1,29 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main, rc/*, feat/*]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        runs-on: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.runs-on }}
+    name: Build
+    steps:
+      - name: Set up Go 1.23.6
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.23.6
+        id: go
+
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test
+        run: go test -v -race ./...
