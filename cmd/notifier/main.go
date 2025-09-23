@@ -3,21 +3,26 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/multiversx/mx-chain-core-go/core"
 	"github.com/multiversx/mx-chain-core-go/core/closing"
 	logger "github.com/multiversx/mx-chain-logger-go"
 	"github.com/multiversx/mx-chain-logger-go/file"
+	"github.com/multiversx/sui-chain-sovereign-notifier-go/config"
+	"github.com/multiversx/sui-chain-sovereign-notifier-go/factory"
 	"github.com/urfave/cli"
 )
 
-var log = logger.GetOrCreate("eth-chain-sovereign-notifier")
+var log = logger.GetOrCreate("sui-chain-sovereign-notifier")
 
 const (
 	configPath = "config/config.toml"
 
 	logsPath       = "logs"
-	logFilePrefix  = "eth-notifier"
+	logFilePrefix  = "sui-notifier"
 	logLifeSpanSec = 432000 // 5 days
 	logLifeSpanMb  = 1024   // 1 GB
 )
@@ -51,70 +56,68 @@ func main() {
 }
 
 func startNotifier(ctx *cli.Context) error {
-	/*
-		cfg, err := loadConfig(configPath)
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return err
+	}
+
+	err = initializeLogger(ctx)
+	if err != nil {
+		return err
+	}
+
+	var logFile closing.Closer
+	withLogFile := ctx.GlobalBool(logSaveFile.Name)
+	if withLogFile {
+		logFile, err = createLogger()
 		if err != nil {
 			return err
 		}
+	}
 
-		err = initializeLogger(ctx)
-		if err != nil {
-			return err
-		}
+	wsClient, err := factory.CreateSUIClientNotifier(cfg)
+	if err != nil {
+		return fmt.Errorf("cannot create sovereign notifier, error: %w", err)
+	}
 
-		var logFile closing.Closer
-		withLogFile := ctx.GlobalBool(logSaveFile.Name)
-		if withLogFile {
-			logFile, err = createLogger()
-			if err != nil {
-				return err
-			}
-		}
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
 
-			wsClient, err := factory.CreateSUIClientNotifier(cfg)
-			if err != nil {
-				return fmt.Errorf("cannot create sovereign notifier, error: %w", err)
-			}
+	log.Info("starting ws client...")
 
-			interrupt := make(chan os.Signal, 1)
-			signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+	<-interrupt
+	log.Info("closing app at user's signal")
 
-			log.Info("starting ws client...")
+	wsClient.Close()
 
-			<-interrupt
-			log.Info("closing app at user's signal")
+	if withLogFile {
+		err = logFile.Close()
+		log.LogIfError(err)
+	}
 
-			wsClient.Close()
-
-		if withLogFile {
-			err = logFile.Close()
-			log.LogIfError(err)
-		}
-	*/
 	return nil
 }
 
-/*
-	func loadConfig(filepath string) (config.Config, error) {
-		cfg := config.Config{}
-		err := core.LoadTomlFile(&cfg, filepath)
+func loadConfig(filepath string) (config.Config, error) {
+	cfg := config.Config{}
+	err := core.LoadTomlFile(&cfg, filepath)
 
-		log.Info("loaded config", "path", configPath)
+	log.Info("loaded config", "path", configPath)
 
-		return cfg, err
+	return cfg, err
+}
+
+func initializeLogger(ctx *cli.Context) error {
+	logLevelFlagValue := ctx.GlobalString(logLevel.Name)
+	err := logger.SetLogLevel(logLevelFlagValue)
+	if err != nil {
+		return err
 	}
 
-	func initializeLogger(ctx *cli.Context) error {
-		logLevelFlagValue := ctx.GlobalString(logLevel.Name)
-		err := logger.SetLogLevel(logLevelFlagValue)
-		if err != nil {
-			return err
-		}
+	disableAnsi := ctx.GlobalBool(disableAnsiColor.Name)
+	return removeANSIColorsForLoggerIfNeeded(disableAnsi)
+}
 
-		disableAnsi := ctx.GlobalBool(disableAnsiColor.Name)
-		return removeANSIColorsForLoggerIfNeeded(disableAnsi)
-	}
-*/
 func removeANSIColorsForLoggerIfNeeded(disableAnsi bool) error {
 	if !disableAnsi {
 		return nil
