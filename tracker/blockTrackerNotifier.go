@@ -2,7 +2,7 @@ package tracker
 
 import (
 	"context"
-	"strconv"
+	"fmt"
 	"time"
 
 	"github.com/block-vision/sui-go-sdk/constant"
@@ -37,91 +37,68 @@ func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, 
 
 func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
 	// receiveMsgCh is a channel to receive Sui event
-	//receiveMsgCh := make(chan models.SuiEventResponse, 10)
+	receiveMsgCh := make(chan models.SuiEventResponse, 10)
+
+	//depositEventType := "0x2::coin::TransferEvent"
 
 	// SubscribeEvent implements the method `suix_subscribeEvent`, subscribe to a stream of Sui event.
-	//err := btn.client.SubscribeEvent(ctx, models.SuiXSubscribeEventsRequest{
-	//	SuiEventFilter: map[string]interface{}{
-	//		"All": []string{},
-	//	},
-	//}, receiveMsgCh)
-	//if err != nil {
-	//	panic(err)
-	//}
+	err := btn.client.SubscribeEvent(ctx, models.SuiXSubscribeEventsRequest{
+		SuiEventFilter: map[string]interface{}{
+			"MoveEventType": "0x2c8d603bc51326b8c13cef9dd07031a408a48dddb541963357661df5d3204809::order_info::OrderPlaced",
+			//"MoveEventType": depositEventType,
+			//"Sender": "0x935029ca5219502a47ac9b69f556ccf6e2198b5e7815cf50f68846f723739cbd",
+			//"All": []string{},
+		},
+	}, receiveMsgCh)
+	if err != nil {
+		panic(err)
+	}
 
-	dsa2("dsa")
+	go func() {
+		for {
+			err := dsa2(ctx)
+			log.LogIfError(err)
 
-	//for {
-	//	select {
-	//	// receive Sui event
-	//	case msg := <-receiveMsgCh:
-	//		err = btn.processEvent(msg)
-	//		log.LogIfError(err)
-	//	case <-ctx.Done():
-	//		return nil
-	//	}
-	//}
+			if err != nil {
+				return
+			}
+
+			log.Error("AOLEO")
+			time.Sleep(time.Second)
+		}
+	}()
+
+	for {
+		select {
+		// receive Sui event
+		case msg := <-receiveMsgCh:
+			err = btn.processEvent2(msg)
+			log.LogIfError(err)
+		case <-ctx.Done():
+			return nil
+		}
+	}
 
 	return nil
 }
 
-func dsa(digest string) {
+func (btn *blockTrackerNotifier) dsa(digest string) {
 	var cli = sui.NewSuiClient(constant.BvMainnetEndpoint)
+	rsp, err := cli.SuiGetTransactionBlock(context.Background(), models.SuiGetTransactionBlockRequest{
+		Digest: digest,
+	})
 
-	ctx := context.Background()
-	latestCheckPoint := 0
-	for {
-		time.Sleep(1 * time.Second)
-
-		checkPoints, err := cli.SuiGetCheckpoints(ctx, models.SuiGetCheckpointsRequest{
-			Limit:           50,
-			DescendingOrder: true,
-		})
+	if err != nil {
 		log.LogIfError(err)
-		_ = err
-
-		for _, cp := range checkPoints.Data {
-			currCheckPoint, _ := strconv.Atoi(cp.SequenceNumber)
-
-			if currCheckPoint > latestCheckPoint {
-				// keep them
-				log.Info("checkpoint: ", "number", cp.SequenceNumber)
-			} else {
-				// discarded
-				log.Error("checkpoint: ", "number", cp.SequenceNumber)
-				break
-			}
-
-		}
-
-		latestCheckPoint, err = strconv.Atoi(checkPoints.Data[0].SequenceNumber)
-
-		log.Info("################################")
+		return
 	}
-	/*
 
-		cli.get
-		rsp, err := cli.SuiGetTransactionBlock(ctx, models.SuiGetTransactionBlockRequest{
-			Digest: digest,
-		})
+	log.Info("got event from checpoint", "sequence", rsp.Checkpoint)
 
-		if err != nil {
-			fmt.Println(err.Error())
-			return
-		}
-
-		cli.Check SuiGetEvents()
-
-		log.Info("HERE")
-		utils.PrettyPrint(rsp)
-
-	*/
 }
 
-func dsa2(digest string) error {
+func dsa2(ctx context.Context) error {
 	var cli = sui.NewSuiClient(constant.BvMainnetEndpoint)
-
-	ctx := context.Background()
 	latestCheckPoint, err := cli.SuiGetLatestCheckpointSequenceNumber(ctx)
 	if err != nil {
 		return err
@@ -129,14 +106,15 @@ func dsa2(digest string) error {
 
 	log.Info("Starting with latest checkpoint sequence", "number", latestCheckPoint)
 
-	sampleSize := uint64(5)
+	sampleSize := uint64(50)
 
 	for {
-		time.Sleep(5 * time.Second)
+		time.Sleep(10 * time.Second)
 
 		currCheckPoint, err := cli.SuiGetLatestCheckpointSequenceNumber(ctx)
+		log.LogIfError(err, "value", true)
 		if err != nil {
-			return err
+			continue
 		}
 
 		passedCheckPoints := currCheckPoint - latestCheckPoint
@@ -166,14 +144,54 @@ func dsa2(digest string) error {
 
 }
 
+func (btn *blockTrackerNotifier) processEvent2(event models.SuiEventResponse) error {
+	parsed := event.ParsedJson
+
+	price, _ := parsed["price"].(string)
+
+	if len(price) > 5 && price[0] == '4' { // && price[1] == '0' {
+		utils.PrettyPrint(event)
+	} else {
+		return nil
+		//	log.Error("ACTUALLY", "from", from, "to", to, "amount", parsed["amount"])
+	}
+
+	log.Debug("received new SUI event", "event seq", event.Id.EventSeq, "digest", event.Id.TxDigest)
+
+	btn.dsa(event.Id.TxDigest)
+
+	return nil
+}
+
 func (btn *blockTrackerNotifier) processEvent(event models.SuiEventResponse) error {
+	utils.PrettyPrint(event)
+
+	accountAddr := "0x935029ca5219502a47ac9b69f556ccf6e2198b5e7815cf50f68846f723739cbd"
+
+	parsed := event.ParsedJson
+
+	from, _ := parsed["sender"].(string)
+	to, _ := parsed["recipient"].(string)
+
+	if from == accountAddr || to == accountAddr {
+		msg := fmt.Sprintf("Token movement relevant: TxDigest=%s, From=%s, To=%s, Amount=%v\n",
+			event.Id.TxDigest, from, to, parsed["amount"])
+
+		log.Error(msg)
+		utils.PrettyPrint(event)
+	} else {
+		//	log.Error("ACTUALLY", "from", from, "to", to, "amount", parsed["amount"])
+	}
+
+	return nil
+
 	if log.GetLevel() == logger.LogTrace {
 		utils.PrettyPrint(event)
 	}
 
 	log.Debug("received new SUI event", "event seq", event.Id.EventSeq, "digest", event.Id.TxDigest)
 
-	dsa(event.Id.TxDigest)
+	btn.dsa(event.Id.TxDigest)
 
 	return nil
 }
