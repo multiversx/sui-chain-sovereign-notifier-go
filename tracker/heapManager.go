@@ -6,15 +6,16 @@ import (
 	"time"
 )
 
-func heapManager(ctx context.Context, incomingChan <-chan *checkPoint) {
+func heapManager(ctx context.Context, latestCheckPoint uint64, incomingChan <-chan *checkPoint) {
 	h := &checkPointHeap{}
 	heap.Init(h)
-	nextExpected := uint64(0)
 
+	lastSentCheckPoint := latestCheckPoint
 	for {
 		select {
 		case cp := <-incomingChan:
 			heap.Push(h, cp)
+			log.Info("HEAP MAANGER RECEIVEEEED", "num", cp.checkpoint, "digest", cp.digest)
 
 		default:
 			if h.Len() == 0 {
@@ -23,14 +24,23 @@ func heapManager(ctx context.Context, incomingChan <-chan *checkPoint) {
 			}
 
 			top := (*h)[0]
-			if !top.ready || top.checkpoint != nextExpected {
+			if !top.IsReady() { //|| top.checkpoint != nextExpected {
 				time.Sleep(50 * time.Millisecond)
 				continue
 			}
 
+			//if top.checkpoint < lastSentCheckPoint+50 {
+			//	time.Sleep(50 * time.Millisecond)
+			//	continue
+			//}
+
 			heap.Pop(h)
+
+			log.Info("sendToSovereign", "checkpoint", top.checkpoint)
 			//sendToSovereign(top)
-			nextExpected++
+			//latestCheckPoint = top.checkpoint
+			lastSentCheckPoint = top.checkpoint
+			_ = lastSentCheckPoint
 		case <-ctx.Done():
 			return
 		}

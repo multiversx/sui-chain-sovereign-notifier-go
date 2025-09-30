@@ -10,7 +10,7 @@ type checkPoint struct {
 	mu         sync.Mutex
 	digest     string
 	checkpoint uint64
-	events     []models.SuiEventFilter
+	events     []models.SuiEventResponse
 	ready      bool
 }
 
