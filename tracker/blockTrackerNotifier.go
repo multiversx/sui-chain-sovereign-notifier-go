@@ -2,6 +2,8 @@ package tracker
 
 import (
 	"context"
+	"errors"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -9,6 +11,12 @@ import (
 	"github.com/block-vision/sui-go-sdk/models"
 	logger "github.com/multiversx/mx-chain-logger-go"
 )
+
+type SUILightCheckpoint struct {
+	Checkpoint uint64                    `json:"checkpoint"`
+	Epoch      string                    `json:"epoch"`
+	Events     []models.SuiEventResponse `json:"events"`
+}
 
 var log = logger.GetOrCreate("sui-tracker")
 
@@ -63,7 +71,7 @@ func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
 
 	go func() {
 		for {
-			err = btn.trackCheckpointsFull(ctx, incomingChan)
+			err = btn.trackCheckpointsFull(ctx)
 			log.LogIfError(err)
 
 			if err != nil {
@@ -89,18 +97,18 @@ func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
 	return nil
 }
 
-func (btn *blockTrackerNotifier) trackCheckpointsFull(ctx context.Context, incomingChan chan<- *checkPoint) error {
-	latestCheckPoint, err := btn.rpcClient.SuiGetLatestCheckpointSequenceNumber(ctx)
+func (btn *blockTrackerNotifier) trackCheckpointsFull(ctx context.Context) error {
+	lastSentCheckPoint, err := btn.rpcClient.SuiGetLatestCheckpointSequenceNumber(ctx)
 	if err != nil {
 		return err
 	}
 
-	log.Info("Starting with latest checkpoint sequence", "number", latestCheckPoint)
+	log.Info("Starting with latest checkpoint sequence", "number", lastSentCheckPoint)
 
-	sampleSize := uint64(50)
+	sampleSize := uint64(10)
 
 	for {
-		time.Sleep(1 * time.Second)
+		time.Sleep(5 * time.Second)
 
 		currCheckPoints, errGet := btn.rpcClient.SuiGetCheckpoints(ctx,
 			models.SuiGetCheckpointsRequest{
@@ -119,21 +127,28 @@ func (btn *blockTrackerNotifier) trackCheckpointsFull(ctx context.Context, incom
 			continue
 		}
 
-		latestSequenceNumber1, err := strconv.Atoi(currCheckPoints.Data[0].SequenceNumber)
+		latestSequenceNumber, err := strconv.Atoi(currCheckPoints.Data[0].SequenceNumber)
 		if err != nil {
 			log.Error("latestSequenceNumber", "error", err)
 			continue
 		}
 
-		checkPointsToSend := make([]uint64, 0)
+		checkPointsToSend := make([]SUILightCheckpoint, 0)
+		allCheckPointsMap := make(map[int]SUILightCheckpoint)
+		checkPointsWithEventsMap := make(map[int]struct{})
 		for idx := len(currCheckPoints.Data) - 1; idx >= 0; idx-- {
-			cp := currCheckPoints.Data[idx]
-			cpSeqNumber, _ := strconv.Atoi(cp.SequenceNumber)
-			if uint64(cpSeqNumber) <= latestCheckPoint {
+			currCheckPoint := currCheckPoints.Data[idx]
+			cpSeqNumber, _ := strconv.Atoi(currCheckPoint.SequenceNumber)
+			if uint64(cpSeqNumber) <= lastSentCheckPoint {
 				continue
 			}
 
-			for _, digest := range cp.Transactions {
+			allCheckPointsMap[cpSeqNumber] = SUILightCheckpoint{
+				Checkpoint: uint64(cpSeqNumber),
+				Epoch:      currCheckPoint.Epoch,
+			}
+
+			for _, digest := range currCheckPoint.Transactions {
 
 				btn.mutex.RLock()
 				events, found := btn.pendingEvents[digest]
@@ -143,55 +158,55 @@ func (btn *blockTrackerNotifier) trackCheckpointsFull(ctx context.Context, incom
 				}
 
 				_ = events
-				log.Info("FOUND CHECKPOINTS TO SEND", "digest", digest, "checkpoint", cp.SequenceNumber)
+				log.Info("FOUND CHECKPOINTS TO SEND", "digest", digest, "checkpoint", currCheckPoint.SequenceNumber, "num events", len(events))
 
-				checkPointsToSend = append(checkPointsToSend, uint64(cpSeqNumber))
+				checkPointsToSend = append(checkPointsToSend, SUILightCheckpoint{
+					Checkpoint: uint64(cpSeqNumber),
+					Epoch:      currCheckPoint.Epoch,
+					Events:     events,
+				})
+
+				checkPointsWithEventsMap[cpSeqNumber] = struct{}{}
 			}
 		}
 
-		if len(checkPointsToSend) > 0 {
-			latestCheckPoint = checkPointsToSend[len(checkPointsToSend)-1]
-		}
-
-		latestSequenceNumber := uint64(latestSequenceNumber1)
-		passedCheckPoints := latestSequenceNumber - latestCheckPoint
+		passedCheckPoints := uint64(latestSequenceNumber) - lastSentCheckPoint
 		if passedCheckPoints < sampleSize {
-			log.Error("not enough checkpoints passed: ", "number", latestSequenceNumber)
+			if len(checkPointsToSend) > 0 {
+				lastSentCheckPoint = checkPointsToSend[len(checkPointsToSend)-1].Checkpoint
+			}
+
+			log.Error("ERLY EXIT")
+
 			continue
 		}
 
 		numBatches := passedCheckPoints / sampleSize
-		if numBatches < 2 {
-			latestCheckPoint += sampleSize
-			// send here checkpoint
-			log.Info("sending checkpoint numBatches < 2", "latestCheckPoint", latestCheckPoint, "numBatches", numBatches)
-
-			// change this
-			/*
-				incomingChan <- &checkPoint{
-					checkpoint: latestCheckPoint,
-					events:     nil,
-					ready:      true,
-				}
-
-			*/
-
-			continue
-		}
-
+		batchedCheckPointsToSend := make([]SUILightCheckpoint, numBatches)
 		for i := uint64(0); i < numBatches; i++ {
-			/*
-				incomingChan <- &checkPoint{
-					checkpoint: latestCheckPoint,
-					events:     nil,
-					ready:      true,
-				}
-			*/
-			checkPointsToSend = append(checkPointsToSend, latestCheckPoint)
-			latestCheckPoint += sampleSize
+			lastSentCheckPoint += sampleSize
+
+			checkPointData, found := allCheckPointsMap[int(lastSentCheckPoint)]
+			if !found {
+				return errors.New("checkPointData not found")
+			}
+
+			batchedCheckPointsToSend = append(batchedCheckPointsToSend, checkPointData)
+
 		}
 
-		log.Info("sending checkpoint numBatches > 2", "checkPointsToSend", checkPointsToSend, "numBatches", numBatches)
+		checkPointsToSend = append(checkPointsToSend, batchedCheckPointsToSend...)
+
+		sort.SliceStable(checkPointsToSend, func(i, j int) bool {
+			return checkPointsToSend[i].Checkpoint < checkPointsToSend[j].Checkpoint
+		})
+
+		log.Info("sending checkpoint numBatches > 2", "numBatches", numBatches)
+
+		for _, cp := range checkPointsToSend {
+			log.Info("cp", "checkpoint", cp.Checkpoint, "len events", len(cp.Events))
+		}
+
 		// send here checkpoints
 
 	}
@@ -264,7 +279,7 @@ func (btn *blockTrackerNotifier) processEvent2(ctx context.Context, incomingChan
 
 	price, _ := parsed["price"].(string)
 
-	if len(price) > 5 && price[0] == '4' { // && price[1] == '0' {
+	if len(price) > 5 { //&& price[0] == '4' { // && price[1] == '0' {
 		//utils.PrettyPrint(event)
 	} else {
 		return nil
@@ -277,7 +292,7 @@ func (btn *blockTrackerNotifier) processEvent2(ctx context.Context, incomingChan
 	if _, found := btn.pendingEvents[event.Id.TxDigest]; !found {
 		btn.pendingEvents[event.Id.TxDigest] = []models.SuiEventResponse{event}
 	} else {
-		btn.pendingEvents[event.Id.TxDigest] = append(btn.pendingEvents[event.Id.EventSeq], event)
+		btn.pendingEvents[event.Id.TxDigest] = append(btn.pendingEvents[event.Id.TxDigest], event)
 	}
 	btn.mutex.Unlock()
 
