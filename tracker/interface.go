@@ -20,6 +20,7 @@ type SUIWSClient interface {
 type SUIRPCClient interface {
 	SuiGetLatestCheckpointSequenceNumber(ctx context.Context) (uint64, error)
 	SuiGetCheckpoint(ctx context.Context, req models.SuiGetCheckpointRequest) (models.CheckpointResponse, error)
+	SuiGetCheckpoints(ctx context.Context, req models.SuiGetCheckpointsRequest) (models.PaginatedCheckpointsResponse, error)
 	SuiGetTransactionBlock(ctx context.Context, req models.SuiGetTransactionBlockRequest) (models.SuiTransactionBlockResponse, error)
 }
 
