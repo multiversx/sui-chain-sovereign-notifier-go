@@ -113,19 +113,24 @@ func (btn *blockTrackerNotifier) fetchCheckpoints(ctx context.Context) error {
 			continue
 		}
 
-		err = btn.processCheckPoints(currCheckPoints, lastSentCheckPoint)
-		if err != nil {
-			log.Error("blockTrackerNotifier.processCheckPoints", "error", err)
+		checkPoints, errProcess := btn.processCheckPoints(currCheckPoints, lastSentCheckPoint)
+		if errProcess != nil {
+			log.Error("blockTrackerNotifier.processCheckPoints", "error", errProcess)
 		}
+
+		lastSentCheckPoint = checkPoints[len(checkPoints)-1].Checkpoint
 	}
 
 }
 
-func (btn *blockTrackerNotifier) processCheckPoints(currCheckPoints models.PaginatedCheckpointsResponse, lastSentCheckPoint uint64) error {
+func (btn *blockTrackerNotifier) processCheckPoints(
+	currCheckPoints models.PaginatedCheckpointsResponse,
+	lastSentCheckPoint uint64,
+) ([]SUILightCheckpoint, error) {
 	latestSequenceNumber, errConvert := strconv.Atoi(currCheckPoints.Data[0].SequenceNumber)
 	if errConvert != nil {
 		log.Error("blockTrackerNotifier: error trying to get latestSequenceNumber", "error", errConvert)
-		return errConvert
+		return nil, errConvert
 	}
 
 	checkPointsToSend := make([]SUILightCheckpoint, 0)
@@ -156,32 +161,9 @@ func (btn *blockTrackerNotifier) processCheckPoints(currCheckPoints models.Pagin
 	}
 
 	passedCheckPoints := uint64(latestSequenceNumber) - lastSentCheckPoint
-	if passedCheckPoints < btn.sampleSize {
-		if len(checkPointsToSend) > 0 {
-			lastSentCheckPoint = checkPointsToSend[len(checkPointsToSend)-1].Checkpoint
-		}
-
-		// SEND HERE
-		log.Error("ERLY EXIT")
-
-		return nil
-	}
-
-	numBatches := passedCheckPoints / btn.sampleSize
-	batchedCheckPointsToSend := make([]SUILightCheckpoint, 0)
-	for i := uint64(0); i < numBatches; i++ {
-		lastSentCheckPoint += btn.sampleSize
-
-		checkPointData, found := allCheckPointsMap[int(lastSentCheckPoint)]
-		if !found {
-			return errors.New("checkPointData not found")
-		}
-
-		if _, alreadyExists := checkPointsWithIncomingEventsMap[int(lastSentCheckPoint)]; alreadyExists {
-			continue
-		}
-
-		batchedCheckPointsToSend = append(batchedCheckPointsToSend, checkPointData)
+	batchedCheckPointsToSend, err := btn.getBatchedCheckpoints(passedCheckPoints, lastSentCheckPoint, allCheckPointsMap, checkPointsWithIncomingEventsMap)
+	if err != nil {
+		return nil, err
 	}
 
 	checkPointsToSend = append(checkPointsToSend, batchedCheckPointsToSend...)
@@ -190,13 +172,38 @@ func (btn *blockTrackerNotifier) processCheckPoints(currCheckPoints models.Pagin
 		return checkPointsToSend[i].Checkpoint < checkPointsToSend[j].Checkpoint
 	})
 
-	log.Info("sending checkpoint numBatches > 2", "numBatches", numBatches)
-
 	for _, cp := range checkPointsToSend {
 		log.Info("cp", "checkpoint", cp.Checkpoint, "len events", len(cp.Events))
 	}
 
-	return nil
+	return checkPointsToSend, nil
+}
+
+func (btn *blockTrackerNotifier) getBatchedCheckpoints(
+	passedCheckPoints uint64,
+	lastSentCheckPoint uint64,
+	allCheckPointsMap map[int]SUILightCheckpoint,
+	checkPointsWithIncomingEventsMap map[int]struct{},
+) ([]SUILightCheckpoint, error) {
+	numBatches := passedCheckPoints / btn.sampleSize
+	batchedCheckPointsToSend := make([]SUILightCheckpoint, 0)
+
+	for i := uint64(0); i < numBatches; i++ {
+		lastSentCheckPoint += btn.sampleSize
+
+		checkPointData, found := allCheckPointsMap[int(lastSentCheckPoint)]
+		if !found {
+			return nil, errors.New("checkPointData not found")
+		}
+
+		if _, alreadyExists := checkPointsWithIncomingEventsMap[int(lastSentCheckPoint)]; alreadyExists {
+			continue
+		}
+
+		batchedCheckPointsToSend = append(batchedCheckPointsToSend, checkPointData)
+	}
+	log.Info("sending checkpoints", "numBatches", numBatches)
+	return batchedCheckPointsToSend, nil
 }
 
 func (btn *blockTrackerNotifier) getIncomingEvents(checkPoint models.CheckpointResponse) []models.SuiEventResponse {
