@@ -3,7 +3,6 @@ package tracker
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -144,6 +143,9 @@ func (btn *blockTrackerNotifier) processCheckPoints(
 	passedCheckPoints := uint64(latestSequenceNumber) - lastSentCheckPoint
 	numBatches := passedCheckPoints / btn.sampleSize
 	if numBatches == 0 {
+
+		log.Error("NUM BATCHES IS ZERO", "latestSequenceNumber", latestSequenceNumber, "lastSentCheckPoint", lastSentCheckPoint)
+
 		return nil, nil
 	}
 
@@ -152,6 +154,8 @@ func (btn *blockTrackerNotifier) processCheckPoints(
 	checkPointsToSend := make([]SUILightCheckpoint, 0)
 	allCheckPointsMap := make(map[int]SUILightCheckpoint)
 	checkPointsWithIncomingEventsMap := make(map[int]struct{})
+
+	log.Error("STARTING", "start", lastSentCheckPoint, "end", toStopNextBatch, "numBatches", numBatches, "lastSentCheckPoint", lastSentCheckPoint, "latestSequenceNumber", latestSequenceNumber)
 
 	for idx := range currCheckPoints.Data {
 		currCheckPoint := currCheckPoints.Data[idx]
@@ -169,6 +173,7 @@ func (btn *blockTrackerNotifier) processCheckPoints(
 			Epoch:      currCheckPoint.Epoch,
 		}
 
+		saved := false
 		incomingEvents := btn.getIncomingEvents(currCheckPoint)
 		if len(incomingEvents) > 0 {
 			checkPointsToSend = append(checkPointsToSend, SUILightCheckpoint{
@@ -178,23 +183,24 @@ func (btn *blockTrackerNotifier) processCheckPoints(
 			})
 
 			checkPointsWithIncomingEventsMap[cpSeqNumber] = struct{}{}
+		} else if uint64(cpSeqNumber) == btn.lastSentBatchCheckPoint+btn.sampleSize {
+			checkPointsToSend = append(checkPointsToSend, SUILightCheckpoint{
+				Checkpoint: uint64(cpSeqNumber),
+				Epoch:      currCheckPoint.Epoch,
+				Events:     nil,
+			})
+
+			log.Error("HERRERERERERERRERER", "cpSeqNumber", cpSeqNumber)
+
+			btn.lastSentBatchCheckPoint += btn.sampleSize
+			saved = true
 		}
+
+		if !saved && uint64(cpSeqNumber) == btn.lastSentBatchCheckPoint+btn.sampleSize {
+			btn.lastSentBatchCheckPoint += btn.sampleSize
+		}
+
 	}
-
-	batchedCheckPointsToSend, err := btn.getBatchedCheckpoints(
-		passedCheckPoints,
-		allCheckPointsMap,
-		checkPointsWithIncomingEventsMap,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	checkPointsToSend = append(checkPointsToSend, batchedCheckPointsToSend...)
-
-	sort.SliceStable(checkPointsToSend, func(i, j int) bool {
-		return checkPointsToSend[i].Checkpoint < checkPointsToSend[j].Checkpoint
-	})
 
 	for _, cp := range checkPointsToSend {
 		log.Info("cp", "checkpoint", cp.Checkpoint, "len events", len(cp.Events))
