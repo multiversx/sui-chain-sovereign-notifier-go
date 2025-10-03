@@ -48,33 +48,26 @@ func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, 
 }
 
 func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
-	receiveMsgCh := make(chan models.SuiEventResponse, 10)
-
-	err := btn.wsClient.SubscribeEvent(ctx, models.SuiXSubscribeEventsRequest{
-		SuiEventFilter: map[string]interface{}{
-			"MoveEventType": "0x2c8d603bc51326b8c13cef9dd07031a408a48dddb541963357661df5d3204809::order_info::OrderPlaced",
-			//"MoveEventType": depositEventType,
-			//"Sender": "0x935029ca5219502a47ac9b69f556ccf6e2198b5e7815cf50f68846f723739cbd",
-			//"All": []string{},
-		},
-	}, receiveMsgCh)
-	if err != nil {
-		panic(err)
-	}
-
 	go func() {
 		for {
-			err = btn.fetchCheckpoints(ctx)
-			log.LogIfError(err)
-
-			log.Error("AOLEO")
+			err := btn.fetchCheckpoints(ctx)
+			log.Error("blockTrackerNotifier.fetchCheckpoints", "error", err)
 			time.Sleep(time.Second)
 		}
 	}()
 
+	receiveMsgCh := make(chan models.SuiEventResponse, 10)
+	err := btn.wsClient.SubscribeEvent(ctx, models.SuiXSubscribeEventsRequest{
+		SuiEventFilter: map[string]interface{}{
+			"MoveEventType": "0x2c8d603bc51326b8c13cef9dd07031a408a48dddb541963357661df5d3204809::order_info::OrderPlaced",
+		},
+	}, receiveMsgCh)
+	if err != nil {
+		return err
+	}
+
 	for {
 		select {
-		// receive Sui event
 		case msg := <-receiveMsgCh:
 			err = btn.processEvent(msg)
 			log.LogIfError(err)
@@ -82,21 +75,20 @@ func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
 			return nil
 		}
 	}
-
-	return nil
 }
 
 func (btn *blockTrackerNotifier) fetchCheckpoints(ctx context.Context) error {
-	lastSentCheckPoint, err := btn.rpcClient.SuiGetLatestCheckpointSequenceNumber(ctx)
-	if err != nil {
-		return err
-	}
-
-	log.Info("Starting with latest checkpoint sequence", "number", lastSentCheckPoint)
-
 	if btn.lastSentBatchCheckPoint == 0 {
+		lastSentCheckPoint, err := btn.rpcClient.SuiGetLatestCheckpointSequenceNumber(ctx)
+		if err != nil {
+			return err
+		}
+
 		btn.lastSentBatchCheckPoint = lastSentCheckPoint
 	}
+
+	log.Info("starting with latest checkpoint sequence", "number", btn.lastSentBatchCheckPoint)
+
 	for {
 		time.Sleep(5 * time.Second)
 
@@ -117,129 +109,89 @@ func (btn *blockTrackerNotifier) fetchCheckpoints(ctx context.Context) error {
 			continue
 		}
 
-		log.Error("DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", "num", len(currCheckPoints.Data))
+		log.Debug("fetched checkpoints", "len", len(currCheckPoints.Data))
 
-		checkPoints, errProcess := btn.processCheckPoints(currCheckPoints, lastSentCheckPoint)
+		checkPoints, errProcess := btn.processCheckPoints(currCheckPoints)
 		if errProcess != nil {
 			log.Error("blockTrackerNotifier.processCheckPoints", "error", errProcess)
 		}
 
-		if len(checkPoints) > 0 {
-			lastSentCheckPoint = checkPoints[len(checkPoints)-1].Checkpoint
+		for _, cp := range checkPoints {
+			log.Info("cp", "checkpoint", cp.Checkpoint, "len events", len(cp.Events))
 		}
+
 	}
 
 }
 
 func (btn *blockTrackerNotifier) processCheckPoints(
 	currCheckPoints models.PaginatedCheckpointsResponse,
-	lastSentCheckPoint uint64,
 ) ([]SUILightCheckpoint, error) {
 	latestSequenceNumber, errConvert := strconv.Atoi(currCheckPoints.Data[len(currCheckPoints.Data)-1].SequenceNumber)
 	if errConvert != nil {
 		log.Error("blockTrackerNotifier: error trying to get latestSequenceNumber", "error", errConvert)
 		return nil, errConvert
 	}
-	passedCheckPoints := uint64(latestSequenceNumber) - lastSentCheckPoint
+
+	passedCheckPoints := uint64(latestSequenceNumber) - btn.lastSentBatchCheckPoint
 	numBatches := passedCheckPoints / btn.sampleSize
 	if numBatches == 0 {
-
-		log.Error("NUM BATCHES IS ZERO", "latestSequenceNumber", latestSequenceNumber, "lastSentCheckPoint", lastSentCheckPoint)
+		log.Debug("processCheckPoints: num batches == 0",
+			"latestSequenceNumber", latestSequenceNumber,
+			"lastSentCheckPoint", btn.lastSentBatchCheckPoint,
+			"passedCheckPoints", passedCheckPoints,
+		)
 
 		return nil, nil
 	}
 
-	toStopNextBatch := lastSentCheckPoint + numBatches*btn.sampleSize
+	endNextBatchSeqNumber := btn.lastSentBatchCheckPoint + numBatches*btn.sampleSize
+	log.Debug("processCheckPoints",
+		"start", btn.lastSentBatchCheckPoint,
+		"end", endNextBatchSeqNumber,
+		"numBatches", numBatches,
+		"latestSequenceNumber", latestSequenceNumber,
+	)
 
 	checkPointsToSend := make([]SUILightCheckpoint, 0)
-	allCheckPointsMap := make(map[int]SUILightCheckpoint)
-	checkPointsWithIncomingEventsMap := make(map[int]struct{})
-
-	log.Error("STARTING", "start", lastSentCheckPoint, "end", toStopNextBatch, "numBatches", numBatches, "lastSentCheckPoint", lastSentCheckPoint, "latestSequenceNumber", latestSequenceNumber)
-
 	for idx := range currCheckPoints.Data {
 		currCheckPoint := currCheckPoints.Data[idx]
-		cpSeqNumber, _ := strconv.Atoi(currCheckPoint.SequenceNumber)
-		if uint64(cpSeqNumber) <= lastSentCheckPoint {
+		cpSeqNumber, err := strconv.Atoi(currCheckPoint.SequenceNumber)
+		if err != nil {
+			return nil, err
+		}
+
+		if uint64(cpSeqNumber) <= btn.lastSentBatchCheckPoint {
 			continue
 		}
 
-		if uint64(cpSeqNumber) > toStopNextBatch {
+		if uint64(cpSeqNumber) > endNextBatchSeqNumber {
 			break
 		}
 
-		allCheckPointsMap[cpSeqNumber] = SUILightCheckpoint{
-			Checkpoint: uint64(cpSeqNumber),
-			Epoch:      currCheckPoint.Epoch,
-		}
-
-		saved := false
 		incomingEvents := btn.getIncomingEvents(currCheckPoint)
-		if len(incomingEvents) > 0 {
+		if uint64(cpSeqNumber) == btn.lastSentBatchCheckPoint+btn.sampleSize {
 			checkPointsToSend = append(checkPointsToSend, SUILightCheckpoint{
 				Checkpoint: uint64(cpSeqNumber),
 				Epoch:      currCheckPoint.Epoch,
 				Events:     incomingEvents,
 			})
-
-			checkPointsWithIncomingEventsMap[cpSeqNumber] = struct{}{}
-		} else if uint64(cpSeqNumber) == btn.lastSentBatchCheckPoint+btn.sampleSize {
+			btn.lastSentBatchCheckPoint += btn.sampleSize
+		} else if len(incomingEvents) > 0 {
 			checkPointsToSend = append(checkPointsToSend, SUILightCheckpoint{
 				Checkpoint: uint64(cpSeqNumber),
 				Epoch:      currCheckPoint.Epoch,
-				Events:     nil,
+				Events:     incomingEvents,
 			})
-
-			log.Error("HERRERERERERERRERER", "cpSeqNumber", cpSeqNumber)
-
-			btn.lastSentBatchCheckPoint += btn.sampleSize
-			saved = true
 		}
-
-		if !saved && uint64(cpSeqNumber) == btn.lastSentBatchCheckPoint+btn.sampleSize {
-			btn.lastSentBatchCheckPoint += btn.sampleSize
-		}
-
-	}
-
-	for _, cp := range checkPointsToSend {
-		log.Info("cp", "checkpoint", cp.Checkpoint, "len events", len(cp.Events))
 	}
 
 	return checkPointsToSend, nil
 }
 
-func (btn *blockTrackerNotifier) getBatchedCheckpoints(
-	passedCheckPoints uint64,
-	allCheckPointsMap map[int]SUILightCheckpoint,
-	checkPointsWithIncomingEventsMap map[int]struct{},
-) ([]SUILightCheckpoint, error) {
-	numBatches := passedCheckPoints / btn.sampleSize
-	batchedCheckPointsToSend := make([]SUILightCheckpoint, 0)
-
-	for i := uint64(0); i < numBatches; i++ {
-		btn.lastSentBatchCheckPoint += btn.sampleSize
-
-		checkPointData, found := allCheckPointsMap[int(btn.lastSentBatchCheckPoint)]
-		if !found {
-			log.Error("checkPointData not found", "last checkpoint", btn.lastSentBatchCheckPoint)
-			//return nil, errors.New("checkPointData not found")
-		}
-
-		if _, alreadyExists := checkPointsWithIncomingEventsMap[int(btn.lastSentBatchCheckPoint)]; alreadyExists {
-			continue
-		}
-
-		batchedCheckPointsToSend = append(batchedCheckPointsToSend, checkPointData)
-	}
-	log.Info("sending checkpoints", "numBatches", numBatches)
-	return batchedCheckPointsToSend, nil
-}
-
 func (btn *blockTrackerNotifier) getIncomingEvents(checkPoint models.CheckpointResponse) []models.SuiEventResponse {
 	incomingEvents := make([]models.SuiEventResponse, 0)
 	for _, digest := range checkPoint.Transactions {
-
 		btn.mutex.RLock()
 		events, found := btn.pendingEvents[digest]
 		btn.mutex.RUnlock()
@@ -253,8 +205,9 @@ func (btn *blockTrackerNotifier) getIncomingEvents(checkPoint models.CheckpointR
 
 		incomingEvents = append(incomingEvents, events...)
 		log.Debug("blockTrackerNotifier: found incoming events",
-			"digest", digest, "checkpoint",
-			checkPoint.SequenceNumber, "num events", len(events),
+			"digest", digest,
+			"checkpoint", checkPoint.SequenceNumber,
+			"num events", len(events),
 		)
 	}
 
