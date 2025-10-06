@@ -5,5 +5,5 @@ hasher_type = "blake2b"
 marshaller_type = "gogo protobuf"
 
 [client_config]
-    rpc_url = "https://fullnode.mainnet.sui.io" # "https://sui-mainnet-endpoint.blockvision.org"
+    rpc_url = "https://sui-mainnet-endpoint.blockvision.org" # "https://fullnode.mainnet.sui.io" # "https://sui-mainnet-endpoint.blockvision.org"
     ws_url = "wss://rpc-mainnet.suiscan.xyz/websocket"

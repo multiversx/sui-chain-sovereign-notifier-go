@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/block-vision/sui-go-sdk/models"
+	"github.com/multiversx/mx-chain-core-go/core"
+	"github.com/multiversx/mx-chain-core-go/core/closing"
+	"github.com/multiversx/mx-chain-core-go/core/sovereign"
 	logger "github.com/multiversx/mx-chain-logger-go"
 )
 
@@ -32,7 +35,8 @@ type blockTrackerNotifier struct {
 	incomingHeaderCreator IncomingHeaderCreator
 	headersNotifier       IncomingHeadersNotifierHandler
 
-	mutex sync.RWMutex
+	closer core.SafeCloser
+	mutex  sync.RWMutex
 
 	pendingEvents           map[string][]models.SuiEventResponse
 	sampleSize              uint64
@@ -42,6 +46,7 @@ type blockTrackerNotifier struct {
 func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, error) {
 	return &blockTrackerNotifier{
 		rpcClient:             args.RPCClient,
+		closer:                closing.NewSafeChanCloser(),
 		wsClient:              args.WSClient,
 		incomingHeaderCreator: args.IncomingHeaderCreator,
 		pendingEvents:         make(map[string][]models.SuiEventResponse),
@@ -51,36 +56,20 @@ func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, 
 }
 
 func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
+	btn.closer = closing.NewSafeChanCloser()
+
 	go func() {
 		for {
-			err := btn.fetchCheckpoints(ctx)
+			err := btn.trackCheckPoints(ctx)
 			log.Error("blockTrackerNotifier.fetchCheckpoints", "error", err)
 			time.Sleep(time.Second)
 		}
 	}()
 
-	receiveMsgCh := make(chan models.SuiEventResponse, 10)
-	err := btn.wsClient.SubscribeEvent(ctx, models.SuiXSubscribeEventsRequest{
-		SuiEventFilter: map[string]interface{}{
-			"MoveEventType": "0x2c8d603bc51326b8c13cef9dd07031a408a48dddb541963357661df5d3204809::order_info::OrderPlaced",
-		},
-	}, receiveMsgCh)
-	if err != nil {
-		return err
-	}
-
-	for {
-		select {
-		case msg := <-receiveMsgCh:
-			err = btn.processEvent(msg)
-			log.LogIfError(err)
-		case <-ctx.Done():
-			return nil
-		}
-	}
+	return btn.trackEvents(ctx)
 }
 
-func (btn *blockTrackerNotifier) fetchCheckpoints(ctx context.Context) error {
+func (btn *blockTrackerNotifier) trackCheckPoints(ctx context.Context) error {
 	if btn.lastSentBatchCheckPoint == 0 {
 		lastSentCheckPoint, err := btn.rpcClient.SuiGetLatestCheckpointSequenceNumber(ctx)
 		if err != nil {
@@ -92,37 +81,48 @@ func (btn *blockTrackerNotifier) fetchCheckpoints(ctx context.Context) error {
 
 	log.Info("starting with latest checkpoint sequence", "number", btn.lastSentBatchCheckPoint)
 
+	timer := time.NewTicker(5 * time.Second)
+	defer timer.Stop()
+
 	for {
-		time.Sleep(5 * time.Second)
+		select {
+		case <-btn.closer.ChanClose():
+			log.Debug("blockTrackerNotifier.trackCheckPoints: closing channel")
+			return nil
+		case <-ctx.Done():
+			log.Debug("blockTrackerNotifier.trackCheckPoints: context done")
+			return nil
+		case <-timer.C:
+			currCheckPoints, errGet := btn.rpcClient.SuiGetCheckpoints(ctx,
+				models.SuiGetCheckpointsRequest{
+					Cursor:          fmt.Sprintf("%d", btn.lastSentBatchCheckPoint),
+					Limit:           50,
+					DescendingOrder: false,
+				},
+			)
+			if errGet != nil {
+				log.Error("blockTrackerNotifier.btn.rpcClient.SuiGetCheckpoints", "error", errGet)
+				continue
+			}
 
-		currCheckPoints, errGet := btn.rpcClient.SuiGetCheckpoints(ctx,
-			models.SuiGetCheckpointsRequest{
-				Cursor:          fmt.Sprintf("%d", btn.lastSentBatchCheckPoint),
-				Limit:           50,
-				DescendingOrder: false,
-			},
-		)
-		if errGet != nil {
-			log.Error("blockTrackerNotifier.btn.rpcClient.SuiGetCheckpoints", "error", errGet)
-			continue
-		}
+			if len(currCheckPoints.Data) == 0 {
+				log.Debug("blockTrackerNotifier.currCheckPoints.Data", "len is zero", true)
+				continue
+			}
 
-		if len(currCheckPoints.Data) == 0 {
-			log.Debug("blockTrackerNotifier.currCheckPoints.Data", "len is zero", true)
-			continue
-		}
+			log.Debug("fetched checkpoints", "len", len(currCheckPoints.Data))
 
-		log.Debug("fetched checkpoints", "len", len(currCheckPoints.Data))
+			checkPoints, errProcess := btn.processCheckPoints(currCheckPoints)
+			if errProcess != nil {
+				log.Error("blockTrackerNotifier.processCheckPoints", "error", errProcess)
+				return errProcess
+			}
 
-		checkPoints, errProcess := btn.processCheckPoints(currCheckPoints)
-		if errProcess != nil {
-			log.Error("blockTrackerNotifier.processCheckPoints", "error", errProcess)
-		}
-
-		err := btn.notifyIncomingHeaders(checkPoints)
-		if err != nil {
-			log.Error("blockTrackerNotifier.notifyIncomingHeaders", "error", err)
-			return err
+			err := btn.notifyIncomingHeaders(checkPoints)
+			if err != nil {
+				log.Error("blockTrackerNotifier.notifyIncomingHeaders", "error", err)
+				return err
+			}
 		}
 	}
 
@@ -260,6 +260,38 @@ func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightChe
 	return nil
 }
 
+func (btn *blockTrackerNotifier) trackEvents(ctx context.Context) error {
+	receiveMsgCh := make(chan models.SuiEventResponse, 10)
+	err := btn.wsClient.SubscribeEvent(ctx, models.SuiXSubscribeEventsRequest{
+		SuiEventFilter: map[string]interface{}{
+			"MoveEventType": "0x2c8d603bc51326b8c13cef9dd07031a408a48dddb541963357661df5d3204809::order_info::OrderPlaced",
+		},
+	}, receiveMsgCh)
+	if err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case msg := <-receiveMsgCh:
+			err = btn.processEvent(msg)
+			log.LogIfError(err)
+		case <-ctx.Done():
+			log.Debug("blockTrackerNotifier.trackEvents: context done")
+			return nil
+		case <-btn.closer.ChanClose():
+			log.Debug("blockTrackerNotifier.trackCheckPoints: closing channel")
+			return nil
+		}
+	}
+}
+
+// RegisterHandler will register an incoming header subscriber
+func (btn *blockTrackerNotifier) RegisterHandler(handler sovereign.IncomingHeaderSubscriber) error {
+	return btn.headersNotifier.RegisterSubscriber(handler)
+}
+
 // Close will close the underlying client and closer chan
 func (btn *blockTrackerNotifier) Close() {
+	defer btn.closer.Close() // should always be last
 }
