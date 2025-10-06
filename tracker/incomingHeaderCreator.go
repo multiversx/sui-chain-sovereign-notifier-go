@@ -2,10 +2,11 @@ package tracker
 
 import (
 	"encoding/json"
-	"strconv"
 
 	"github.com/block-vision/sui-go-sdk/models"
 	"github.com/multiversx/mx-chain-core-go/data/sovereign"
+	"github.com/multiversx/mx-chain-core-go/data/sovereign/dto"
+	"github.com/multiversx/mx-chain-core-go/data/transaction"
 )
 
 type incomingHeaderCreator struct {
@@ -18,41 +19,34 @@ func NewIncomingHeadersCreator() *incomingHeaderCreator {
 
 // CreateIncomingHeader will create an incoming header for MVX chain, based on the provided ETH header with its incoming logs
 // For now, the proof represents the json bytes of the ETH header.
-func (ihc *incomingHeaderCreator) CreateIncomingHeader(event models.SuiEventResponse) (sovereign.IncomingHeaderHandler, error) {
-	bytes, err := json.Marshal(event)
-	if err != nil {
-		return nil, err
-	}
-
-	nonce, err := strconv.Atoi(event.Id.EventSeq)
+func (ihc *incomingHeaderCreator) CreateIncomingHeader(checkPoint SUILightCheckpoint) (sovereign.IncomingHeaderHandler, error) {
+	bytes, err := json.Marshal(checkPoint)
 	if err != nil {
 		return nil, err
 	}
 
 	return &sovereign.IncomingHeader{
-		Proof: bytes,
-		Nonce: uint64(nonce),
-		//IncomingEvents: createIncomingEvents(logs),
+		SourceChainID:  dto.SUI,
+		Proof:          bytes,
+		Nonce:          checkPoint.Checkpoint,
+		IncomingEvents: createIncomingEvents(checkPoint.Events),
 	}, nil
 }
 
-/*
-func createIncomingEvents(logs []types.Log) []*transaction.Event {
-	incomingEvents := make([]*transaction.Event, len(logs))
+func createIncomingEvents(events []models.SuiEventResponse) []*transaction.Event {
+	incomingEvents := make([]*transaction.Event, len(events))
 
-	for idx, ethLog := range logs {
+	for idx, event := range events {
 		incomingEvents[idx] = &transaction.Event{
-			Address:    ethLog.Address.Bytes(),
-			Identifier: nil, // todo
-			Topics:     getTopics(ethLog.Topics),
-			Data:       ethLog.Data,
+			Address: []byte(event.Sender),
+			// TODO: Rest of the fields should be taken from event.ParsedJson like:
+			// parsed := event.ParsedJson
+			// token, _ := parsed["token"].(string)
 		}
 	}
 
 	return incomingEvents
 }
-
-*/
 
 // IsInterfaceNil checks if the underlying pointer is nil
 func (ihc *incomingHeaderCreator) IsInterfaceNil() bool {

@@ -4,13 +4,20 @@ import (
 	"context"
 
 	"github.com/block-vision/sui-go-sdk/models"
+	sovCore "github.com/multiversx/mx-chain-core-go/core/sovereign"
 	"github.com/multiversx/mx-chain-core-go/data/sovereign"
 )
 
 // IncomingHeaderCreator defines an incoming header creator behavior
 type IncomingHeaderCreator interface {
-	CreateIncomingHeader(event models.SuiEventResponse) (sovereign.IncomingHeaderHandler, error)
+	CreateIncomingHeader(checkPoint SUILightCheckpoint) (sovereign.IncomingHeaderHandler, error)
 	IsInterfaceNil() bool
+}
+
+// IncomingHeadersNotifierHandler defines an incoming header notifier behavior
+type IncomingHeadersNotifierHandler interface {
+	NotifyHeaderSubscribers(header sovereign.IncomingHeaderHandler) error
+	RegisterSubscriber(handler sovCore.IncomingHeaderSubscriber) error
 }
 
 type SUIWSClient interface {

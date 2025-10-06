@@ -1,0 +1,9 @@
+# Possible values: sha256, keccak, blake2b. Should be compatible with sovereign nodes
+hasher_type = "blake2b"
+
+# Possible values: json, gogo protobuf. Should be compatible with sovereign nodes
+marshaller_type = "gogo protobuf"
+
+[client_config]
+    rpc_url = "https://fullnode.mainnet.sui.io" # "https://sui-mainnet-endpoint.blockvision.org"
+    ws_url = "wss://rpc-mainnet.suiscan.xyz/websocket"

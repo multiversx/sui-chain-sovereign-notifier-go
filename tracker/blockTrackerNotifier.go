@@ -23,12 +23,14 @@ type ArgsSuiTrackerNotifier struct {
 	WSClient              SUIWSClient
 	RPCClient             SUIRPCClient
 	IncomingHeaderCreator IncomingHeaderCreator
+	HeadersNotifier       IncomingHeadersNotifierHandler
 }
 
 type blockTrackerNotifier struct {
 	wsClient              SUIWSClient
 	rpcClient             SUIRPCClient
 	incomingHeaderCreator IncomingHeaderCreator
+	headersNotifier       IncomingHeadersNotifierHandler
 
 	mutex sync.RWMutex
 
@@ -43,6 +45,7 @@ func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, 
 		wsClient:              args.WSClient,
 		incomingHeaderCreator: args.IncomingHeaderCreator,
 		pendingEvents:         make(map[string][]models.SuiEventResponse),
+		headersNotifier:       args.HeadersNotifier,
 		sampleSize:            10,
 	}, nil
 }
@@ -116,10 +119,11 @@ func (btn *blockTrackerNotifier) fetchCheckpoints(ctx context.Context) error {
 			log.Error("blockTrackerNotifier.processCheckPoints", "error", errProcess)
 		}
 
-		for _, cp := range checkPoints {
-			log.Info("cp", "checkpoint", cp.Checkpoint, "len events", len(cp.Events))
+		err := btn.notifyIncomingHeaders(checkPoints)
+		if err != nil {
+			log.Error("blockTrackerNotifier.notifyIncomingHeaders", "error", err)
+			return err
 		}
-
 	}
 
 }
@@ -232,6 +236,26 @@ func (btn *blockTrackerNotifier) processEvent(event models.SuiEventResponse) err
 		btn.pendingEvents[event.Id.TxDigest] = append(btn.pendingEvents[event.Id.TxDigest], event)
 	}
 	btn.mutex.Unlock()
+
+	return nil
+}
+
+func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightCheckpoint) error {
+	for _, cp := range checkPoints {
+		log.Info("cp", "checkpoint", cp.Checkpoint, "len events", len(cp.Events))
+	}
+
+	for _, checkPoint := range checkPoints {
+		incomingHeader, err := btn.incomingHeaderCreator.CreateIncomingHeader(checkPoint)
+		if err != nil {
+			return err
+		}
+
+		err = btn.headersNotifier.NotifyHeaderSubscribers(incomingHeader)
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }

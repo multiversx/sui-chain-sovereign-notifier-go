@@ -8,7 +8,6 @@ toolchain go1.24.7
 
 require (
 	github.com/block-vision/sui-go-sdk v1.1.2
-	github.com/gorilla/websocket v1.5.0
 	github.com/multiversx/mx-chain-core-go v1.4.0
 	github.com/multiversx/mx-chain-logger-go v1.1.0
 	github.com/urfave/cli v1.22.17
@@ -22,6 +21,7 @@ require (
 	github.com/go-playground/validator/v10 v10.12.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/leodido/go-urn v1.2.2 // indirect
 	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/pelletier/go-toml v1.9.3 // indirect
