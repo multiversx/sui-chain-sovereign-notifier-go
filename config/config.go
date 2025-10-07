@@ -13,11 +13,13 @@ type Config struct {
 	ClientConfig     SUIClientConfig   `toml:"client_config"`
 }
 
+// SubscribedEvent holds subscribed SUI events to be received via ws
 type SubscribedEvent struct {
 	EventType string `toml:"event_type"`
 	Value     string `toml:"value"`
 }
 
+// SUIClientConfig holds SUI client connection urls
 type SUIClientConfig struct {
 	RPCUrl string `toml:"rpc_url"`
 	WSUrl  string `toml:"ws_url"`

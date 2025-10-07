@@ -17,7 +17,7 @@ func NewIncomingHeadersCreator() *incomingHeaderCreator {
 	return &incomingHeaderCreator{}
 }
 
-// CreateIncomingHeader will create an incoming header for MVX chain, based on the provided ETH header with its incoming logs
+// CreateIncomingHeader will create an incoming header for MVX chain, based on the provided SUI checkpoint with its incoming events
 // For now, the proof represents the json bytes of the ETH header.
 func (ihc *incomingHeaderCreator) CreateIncomingHeader(checkPoint SUILightCheckpoint) (sovereign.IncomingHeaderHandler, error) {
 	bytes, err := json.Marshal(checkPoint)

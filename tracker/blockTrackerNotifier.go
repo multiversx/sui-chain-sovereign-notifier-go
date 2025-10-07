@@ -15,16 +15,11 @@ import (
 	"github.com/multiversx/sui-chain-sovereign-notifier-go/config"
 )
 
-type SUILightCheckpoint struct {
-	Checkpoint uint64                    `json:"checkpoint"`
-	Epoch      string                    `json:"epoch"`
-	Events     []models.SuiEventResponse `json:"events"`
-}
-
 var log = logger.GetOrCreate("sui-tracker")
 
+// ArgsSuiTrackerNotifier is a struct placeholder for args needed to create a sui checkpoint tracker
 type ArgsSuiTrackerNotifier struct {
-	PoolingTime        uint8 `toml:"pooling_time"`
+	PoolingTime        uint8
 	BatchSize          uint64
 	StartingCheckpoint uint64
 
@@ -47,12 +42,13 @@ type blockTrackerNotifier struct {
 
 	pendingEvents           map[string][]models.SuiEventResponse
 	subscribedEvents        map[string]interface{}
-	sampleSize              uint64
+	batchSize               uint64
 	lastSentBatchCheckPoint uint64
 	startingCheckpoint      uint64
 	poolingTime             uint8
 }
 
+// NewSUITrackerNotifier creates a new sui checkpoint tracker that will notify incoming headers to sovereign chain
 func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, error) {
 	err := checkArgs(args)
 	if err != nil {
@@ -66,7 +62,7 @@ func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, 
 		incomingHeaderCreator: args.IncomingHeaderCreator,
 		pendingEvents:         make(map[string][]models.SuiEventResponse),
 		headersNotifier:       args.HeadersNotifier,
-		sampleSize:            args.BatchSize,
+		batchSize:             args.BatchSize,
 		startingCheckpoint:    args.StartingCheckpoint,
 		poolingTime:           args.PoolingTime,
 		subscribedEvents:      createSubScribedEvents(args.SubscribedEvents),
@@ -104,6 +100,35 @@ func createSubScribedEvents(subscribedEvents []config.SubscribedEvent) map[strin
 	return ret
 }
 
+// Start launches the main tracking loop responsible for monitoring Sui checkpoints
+// and forwarding them, in order, to the sovereign chain. It will wait until the
+// start checkpoint provided is reached(if set to 0, it will start from the latest checkpoint).
+//
+// The process runs continuously and performs the following tasks:
+//
+//  1. Periodically fetches recent checkpoints from the Sui RPC endpoint based on
+//     the configured pooling time interval.
+//
+//  2. Collects and organizes checkpoint data(via websocket subscription) together with any Sui events that
+//     occurred within those checkpoints, ensuring strictly ordered transmission.
+//
+//  3. Sends checkpoints immediately when they contain relevant on-chain events,
+//     ensuring real-time updates to the sovereign chain.
+//
+//  4. For empty or inactive checkpoints, batches them according to the configured
+//     batch size, ensuring the sovereign chain remains synchronized even during
+//     periods of low activity. For example, if `batch_size = 100`, it will
+//     send checkpoints 1001, 1101, 1201, and so on.
+//
+//  5. If new events appear between these batch intervals, intermediate checkpoints
+//     (e.g. 1050, 1075) are also sent immediately, ensuring no event is delayed
+//     or skipped between two batch boundaries.
+//
+// This hybrid design provides a balance between responsiveness (event-based triggers)
+// and efficiency (batch transmission for quiet periods).
+//
+// The tracker is resilient to transient RPC errors — any temporary failure will be
+// retried on the next polling cycle.
 func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
 	btn.closer = closing.NewSafeChanCloser()
 
@@ -140,7 +165,7 @@ func (btn *blockTrackerNotifier) waitUntilStartingCheckPoint(ctx context.Context
 			}
 
 			if btn.startingCheckpoint == 0 {
-				btn.lastSentBatchCheckPoint = latestCheckPoint - btn.sampleSize
+				btn.lastSentBatchCheckPoint = latestCheckPoint - btn.batchSize
 				log.Info("SUI waitUntilStartCheckPoint finished, starting notifying with latest checkpoint",
 					"starting checkpoint", btn.lastSentBatchCheckPoint,
 					"latestCheckPoint", latestCheckPoint,
@@ -149,7 +174,7 @@ func (btn *blockTrackerNotifier) waitUntilStartingCheckPoint(ctx context.Context
 			}
 
 			if latestCheckPoint >= btn.startingCheckpoint {
-				btn.lastSentBatchCheckPoint = btn.startingCheckpoint - btn.sampleSize
+				btn.lastSentBatchCheckPoint = btn.startingCheckpoint - btn.batchSize
 				log.Info("SUI waitUntilStartCheckPoint finished",
 					"starting checkpoint", btn.lastSentBatchCheckPoint,
 					"latestCheckPoint", latestCheckPoint,
@@ -227,7 +252,7 @@ func (btn *blockTrackerNotifier) processCheckPoints(
 	}
 
 	passedCheckPoints := uint64(latestSequenceNumber) - btn.lastSentBatchCheckPoint
-	numBatches := passedCheckPoints / btn.sampleSize
+	numBatches := passedCheckPoints / btn.batchSize
 	if numBatches == 0 {
 		log.Debug("processCheckPoints: num batches == 0",
 			"latestSequenceNumber", latestSequenceNumber,
@@ -238,7 +263,7 @@ func (btn *blockTrackerNotifier) processCheckPoints(
 		return nil, nil
 	}
 
-	endNextBatchSeqNumber := btn.lastSentBatchCheckPoint + numBatches*btn.sampleSize
+	endNextBatchSeqNumber := btn.lastSentBatchCheckPoint + numBatches*btn.batchSize
 	log.Debug("processCheckPoints",
 		"start", btn.lastSentBatchCheckPoint,
 		"end", endNextBatchSeqNumber,
@@ -263,13 +288,13 @@ func (btn *blockTrackerNotifier) processCheckPoints(
 		}
 
 		incomingEvents := btn.getIncomingEvents(currCheckPoint)
-		if uint64(cpSeqNumber) == btn.lastSentBatchCheckPoint+btn.sampleSize {
+		if uint64(cpSeqNumber) == btn.lastSentBatchCheckPoint+btn.batchSize {
 			checkPointsToSend = append(checkPointsToSend, SUILightCheckpoint{
 				Checkpoint: uint64(cpSeqNumber),
 				Epoch:      currCheckPoint.Epoch,
 				Events:     incomingEvents,
 			})
-			btn.lastSentBatchCheckPoint += btn.sampleSize
+			btn.lastSentBatchCheckPoint += btn.batchSize
 		} else if len(incomingEvents) > 0 {
 			checkPointsToSend = append(checkPointsToSend, SUILightCheckpoint{
 				Checkpoint: uint64(cpSeqNumber),
@@ -372,7 +397,7 @@ func (btn *blockTrackerNotifier) RegisterHandler(handler sovereign.IncomingHeade
 	return btn.headersNotifier.RegisterSubscriber(handler)
 }
 
-// Close will close the underlying client and closer chan
+// Close will close the underlying mechanisms for rpc/ws tasks
 func (btn *blockTrackerNotifier) Close() {
 	defer btn.closer.Close() // should always be last
 }

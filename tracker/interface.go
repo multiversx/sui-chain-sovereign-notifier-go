@@ -20,18 +20,13 @@ type IncomingHeadersNotifierHandler interface {
 	RegisterSubscriber(handler sovCore.IncomingHeaderSubscriber) error
 }
 
+// SUIWSClient defines a ws SUI client
 type SUIWSClient interface {
 	SubscribeEvent(ctx context.Context, req models.SuiXSubscribeEventsRequest, msgCh chan models.SuiEventResponse) error
 }
 
+// SUIRPCClient defines an rpc SUI client
 type SUIRPCClient interface {
 	SuiGetLatestCheckpointSequenceNumber(ctx context.Context) (uint64, error)
-	SuiGetCheckpoint(ctx context.Context, req models.SuiGetCheckpointRequest) (models.CheckpointResponse, error)
 	SuiGetCheckpoints(ctx context.Context, req models.SuiGetCheckpointsRequest) (models.PaginatedCheckpointsResponse, error)
-	SuiGetTransactionBlock(ctx context.Context, req models.SuiGetTransactionBlockRequest) (models.SuiTransactionBlockResponse, error)
-}
-
-type SUIClientHandler interface {
-	SUIWSClient
-	SUIRPCClient
 }
