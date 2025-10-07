@@ -4,6 +4,27 @@ hasher_type = "blake2b"
 # Possible values: json, gogo protobuf. Should be compatible with sovereign nodes
 marshaller_type = "gogo protobuf"
 
+# Defines the time interval (in seconds) between consecutive RPC fetch
+# operations used to retrieve the latest Sui checkpoints.
+# A smaller value ensures faster synchronization but may increase RPC load.
+pooling_time = 5
+
+# Determines how many consecutive checkpoints are grouped together
+# before being sent to the sovereign chain when no events are detected between them.
+# It defines the sampling interval for checkpoint batching.
+batch_size = 10
+
+# Specifies from which checkpoints onwards we should start sending data.
+# If left to 0 (zero), it will start with the latest checkpoint
+starting_checkpoint = 0
+
+subscribed_events =  [
+    # Check docs here: https://docs.sui.io/guides/developer/sui-101/using-events#filtering-event-queries
+    # Event type = All/MoveEventType/Sender, etc.
+    # Value = json-rpc parameter
+    { event_type = "MoveEventType", value = "0x2c8d603bc51326b8c13cef9dd07031a408a48dddb541963357661df5d3204809::order_info::OrderPlaced" }
+]
+
 [client_config]
-    rpc_url = "https://sui-mainnet-endpoint.blockvision.org" # "https://fullnode.mainnet.sui.io" # "https://sui-mainnet-endpoint.blockvision.org"
+    rpc_url =  "https://fullnode.mainnet.sui.io" # "https://sui-mainnet-endpoint.blockvision.org"
     ws_url = "wss://rpc-mainnet.suiscan.xyz/websocket"

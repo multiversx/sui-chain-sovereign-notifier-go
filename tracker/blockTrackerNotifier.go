@@ -12,6 +12,7 @@ import (
 	"github.com/multiversx/mx-chain-core-go/core/closing"
 	"github.com/multiversx/mx-chain-core-go/core/sovereign"
 	logger "github.com/multiversx/mx-chain-logger-go"
+	"github.com/multiversx/sui-chain-sovereign-notifier-go/config"
 )
 
 type SUILightCheckpoint struct {
@@ -23,6 +24,12 @@ type SUILightCheckpoint struct {
 var log = logger.GetOrCreate("sui-tracker")
 
 type ArgsSuiTrackerNotifier struct {
+	PoolingTime        uint8 `toml:"pooling_time"`
+	BatchSize          uint64
+	StartingCheckpoint uint64
+
+	SubscribedEvents []config.SubscribedEvent
+
 	WSClient              SUIWSClient
 	RPCClient             SUIRPCClient
 	IncomingHeaderCreator IncomingHeaderCreator
@@ -39,13 +46,19 @@ type blockTrackerNotifier struct {
 	mutex  sync.RWMutex
 
 	pendingEvents           map[string][]models.SuiEventResponse
+	subscribedEvents        map[string]interface{}
 	sampleSize              uint64
 	lastSentBatchCheckPoint uint64
-
-	startingCheckpoint uint64
+	startingCheckpoint      uint64
+	poolingTime             uint8
 }
 
 func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, error) {
+	err := checkArgs(args)
+	if err != nil {
+		return nil, err
+	}
+
 	return &blockTrackerNotifier{
 		rpcClient:             args.RPCClient,
 		closer:                closing.NewSafeChanCloser(),
@@ -53,9 +66,42 @@ func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, 
 		incomingHeaderCreator: args.IncomingHeaderCreator,
 		pendingEvents:         make(map[string][]models.SuiEventResponse),
 		headersNotifier:       args.HeadersNotifier,
-		sampleSize:            10,
-		startingCheckpoint:    198094000,
+		sampleSize:            args.BatchSize,
+		startingCheckpoint:    args.StartingCheckpoint,
+		poolingTime:           args.PoolingTime,
+		subscribedEvents:      createSubScribedEvents(args.SubscribedEvents),
 	}, nil
+}
+
+func checkArgs(args ArgsSuiTrackerNotifier) error {
+	if args.PoolingTime == 0 {
+		return fmt.Errorf("%w for pooling time", errZeroValue)
+	}
+	if args.BatchSize == 0 {
+		return fmt.Errorf("%w for batch size", errZeroValue)
+	}
+	if args.WSClient == nil {
+		return errNilWSClient
+	}
+	if args.RPCClient == nil {
+		return errNilRPCClient
+	}
+	if args.IncomingHeaderCreator == nil {
+		return errNilIncomingHeadersCreator
+	}
+	if args.HeadersNotifier == nil {
+		return errNilHeadersNotifier
+	}
+
+	return nil
+}
+
+func createSubScribedEvents(subscribedEvents []config.SubscribedEvent) map[string]interface{} {
+	ret := make(map[string]interface{})
+	for _, event := range subscribedEvents {
+		ret[event.EventType] = event.Value
+	}
+	return ret
 }
 
 func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
@@ -75,7 +121,7 @@ func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
 }
 
 func (btn *blockTrackerNotifier) waitUntilStartingCheckPoint(ctx context.Context) {
-	timer := time.NewTicker(5 * time.Second)
+	timer := time.NewTicker(time.Duration(btn.poolingTime) * time.Second)
 	defer timer.Stop()
 
 	for {
@@ -111,7 +157,7 @@ func (btn *blockTrackerNotifier) waitUntilStartingCheckPoint(ctx context.Context
 				return
 			}
 
-			log.Debug("latest SUI checkpoint is less than starting checkpoint",
+			log.Debug("waiting, latest SUI checkpoint is less than starting checkpoint",
 				"latest checkpoint", latestCheckPoint,
 				"starting checkpoint", btn.startingCheckpoint,
 			)
@@ -123,7 +169,7 @@ func (btn *blockTrackerNotifier) waitUntilStartingCheckPoint(ctx context.Context
 func (btn *blockTrackerNotifier) trackCheckPoints(ctx context.Context) error {
 	log.Info("starting with latest checkpoint sequence", "number", btn.lastSentBatchCheckPoint)
 
-	timer := time.NewTicker(5 * time.Second)
+	timer := time.NewTicker(time.Duration(btn.poolingTime) * time.Second)
 	defer timer.Stop()
 
 	for {
@@ -147,13 +193,6 @@ func (btn *blockTrackerNotifier) trackCheckPoints(ctx context.Context) error {
 				continue
 			}
 
-			if len(currCheckPoints.Data) == 0 {
-				log.Debug("blockTrackerNotifier.currCheckPoints.Data", "len is zero", true)
-				continue
-			}
-
-			log.Debug("fetched checkpoints", "len", len(currCheckPoints.Data))
-
 			checkPoints, errProcess := btn.processCheckPoints(currCheckPoints)
 			if errProcess != nil {
 				log.Error("blockTrackerNotifier.processCheckPoints", "error", errProcess)
@@ -173,7 +212,15 @@ func (btn *blockTrackerNotifier) trackCheckPoints(ctx context.Context) error {
 func (btn *blockTrackerNotifier) processCheckPoints(
 	currCheckPoints models.PaginatedCheckpointsResponse,
 ) ([]SUILightCheckpoint, error) {
-	latestSequenceNumber, errConvert := strconv.Atoi(currCheckPoints.Data[len(currCheckPoints.Data)-1].SequenceNumber)
+	numCheckPoints := len(currCheckPoints.Data)
+	log.Debug("fetched checkpoints", "len", numCheckPoints)
+
+	if numCheckPoints == 0 {
+		log.Debug("blockTrackerNotifier.currCheckPoints.Data", "len is zero", true)
+		return nil, nil
+	}
+
+	latestSequenceNumber, errConvert := strconv.Atoi(currCheckPoints.Data[numCheckPoints-1].SequenceNumber)
 	if errConvert != nil {
 		log.Error("blockTrackerNotifier: error trying to get latestSequenceNumber", "error", errConvert)
 		return nil, errConvert
@@ -261,12 +308,6 @@ func (btn *blockTrackerNotifier) getIncomingEvents(checkPoint models.CheckpointR
 }
 
 func (btn *blockTrackerNotifier) processEvent(event models.SuiEventResponse) error {
-	parsed := event.ParsedJson
-	price, _ := parsed["price"].(string)
-	if !(len(price) > 5) { //&& price[0] == '4' { // && price[1] == '0' {
-		return nil
-	}
-
 	txDigest := event.Id.TxDigest
 	log.Debug("received incoming SUI event", "event seq", event.Id.EventSeq, "digest", txDigest)
 
@@ -305,9 +346,7 @@ func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightChe
 func (btn *blockTrackerNotifier) trackEvents(ctx context.Context) error {
 	receiveMsgCh := make(chan models.SuiEventResponse, 10)
 	err := btn.wsClient.SubscribeEvent(ctx, models.SuiXSubscribeEventsRequest{
-		SuiEventFilter: map[string]interface{}{
-			"MoveEventType": "0x2c8d603bc51326b8c13cef9dd07031a408a48dddb541963357661df5d3204809::order_info::OrderPlaced",
-		},
+		SuiEventFilter: btn.subscribedEvents,
 	}, receiveMsgCh)
 	if err != nil {
 		return err

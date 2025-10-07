@@ -27,6 +27,10 @@ func CreateSUIClientNotifier(cfg config.Config) (SUIClient, error) {
 	}
 
 	return tracker.NewSUITrackerNotifier(tracker.ArgsSuiTrackerNotifier{
+		PoolingTime:           cfg.PoolingTime,
+		BatchSize:             cfg.BatchSize,
+		StartingCheckpoint:    cfg.StartingCheckpoint,
+		SubscribedEvents:      cfg.SubscribedEvents,
 		WSClient:              sui.NewSuiWebsocketClient(cfg.ClientConfig.WSUrl),
 		RPCClient:             sui.NewSuiClient(cfg.ClientConfig.RPCUrl),
 		IncomingHeaderCreator: tracker.NewIncomingHeadersCreator(),
