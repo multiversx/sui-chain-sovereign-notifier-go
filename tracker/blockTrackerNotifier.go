@@ -332,21 +332,6 @@ func (btn *blockTrackerNotifier) getIncomingEvents(checkPoint models.CheckpointR
 	return incomingEvents
 }
 
-func (btn *blockTrackerNotifier) processEvent(event models.SuiEventResponse) error {
-	txDigest := event.Id.TxDigest
-	log.Debug("received incoming SUI event", "event seq", event.Id.EventSeq, "digest", txDigest)
-
-	btn.mutex.Lock()
-	if _, found := btn.pendingEvents[txDigest]; !found {
-		btn.pendingEvents[txDigest] = []models.SuiEventResponse{event}
-	} else {
-		btn.pendingEvents[txDigest] = append(btn.pendingEvents[txDigest], event)
-	}
-	btn.mutex.Unlock()
-
-	return nil
-}
-
 func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightCheckpoint) error {
 	for _, checkPoint := range checkPoints {
 		log.Info("sui tracker notifier: notifying incoming headers",
@@ -390,6 +375,21 @@ func (btn *blockTrackerNotifier) trackEvents(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func (btn *blockTrackerNotifier) processEvent(event models.SuiEventResponse) error {
+	txDigest := event.Id.TxDigest
+	log.Debug("received incoming SUI event", "event seq", event.Id.EventSeq, "digest", txDigest)
+
+	btn.mutex.Lock()
+	if _, found := btn.pendingEvents[txDigest]; !found {
+		btn.pendingEvents[txDigest] = []models.SuiEventResponse{event}
+	} else {
+		btn.pendingEvents[txDigest] = append(btn.pendingEvents[txDigest], event)
+	}
+	btn.mutex.Unlock()
+
+	return nil
 }
 
 // RegisterHandler will register an incoming header subscriber
