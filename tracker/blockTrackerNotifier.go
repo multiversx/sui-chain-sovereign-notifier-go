@@ -290,16 +290,16 @@ func (btn *blockTrackerNotifier) processCheckPoints(
 		incomingEvents := btn.getIncomingEvents(currCheckPoint)
 		if uint64(cpSeqNumber) == btn.lastSentBatchCheckPoint+btn.batchSize {
 			checkPointsToSend = append(checkPointsToSend, SUILightCheckpoint{
-				Checkpoint: uint64(cpSeqNumber),
-				Epoch:      currCheckPoint.Epoch,
-				Events:     incomingEvents,
+				SequenceNumber: uint64(cpSeqNumber),
+				Epoch:          currCheckPoint.Epoch,
+				Events:         incomingEvents,
 			})
 			btn.lastSentBatchCheckPoint += btn.batchSize
 		} else if len(incomingEvents) > 0 {
 			checkPointsToSend = append(checkPointsToSend, SUILightCheckpoint{
-				Checkpoint: uint64(cpSeqNumber),
-				Epoch:      currCheckPoint.Epoch,
-				Events:     incomingEvents,
+				SequenceNumber: uint64(cpSeqNumber),
+				Epoch:          currCheckPoint.Epoch,
+				Events:         incomingEvents,
 			})
 		}
 	}
@@ -335,7 +335,7 @@ func (btn *blockTrackerNotifier) getIncomingEvents(checkPoint models.CheckpointR
 func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightCheckpoint) error {
 	for _, checkPoint := range checkPoints {
 		log.Info("sui tracker notifier: notifying incoming headers",
-			"checkpoint", checkPoint.Checkpoint,
+			"checkpoint", checkPoint.SequenceNumber,
 			"num events", len(checkPoint.Events),
 		)
 
