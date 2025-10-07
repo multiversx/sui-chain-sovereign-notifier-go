@@ -41,6 +41,8 @@ type blockTrackerNotifier struct {
 	pendingEvents           map[string][]models.SuiEventResponse
 	sampleSize              uint64
 	lastSentBatchCheckPoint uint64
+
+	startingCheckpoint uint64
 }
 
 func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, error) {
@@ -52,11 +54,14 @@ func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, 
 		pendingEvents:         make(map[string][]models.SuiEventResponse),
 		headersNotifier:       args.HeadersNotifier,
 		sampleSize:            10,
+		startingCheckpoint:    198094000,
 	}, nil
 }
 
 func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
 	btn.closer = closing.NewSafeChanCloser()
+
+	btn.waitUntilStartingCheckPoint(ctx)
 
 	go func() {
 		for {
@@ -69,16 +74,53 @@ func (btn *blockTrackerNotifier) Start(ctx context.Context) error {
 	return btn.trackEvents(ctx)
 }
 
-func (btn *blockTrackerNotifier) trackCheckPoints(ctx context.Context) error {
-	if btn.lastSentBatchCheckPoint == 0 {
-		lastSentCheckPoint, err := btn.rpcClient.SuiGetLatestCheckpointSequenceNumber(ctx)
-		if err != nil {
-			return err
-		}
+func (btn *blockTrackerNotifier) waitUntilStartingCheckPoint(ctx context.Context) {
+	timer := time.NewTicker(5 * time.Second)
+	defer timer.Stop()
 
-		btn.lastSentBatchCheckPoint = lastSentCheckPoint
+	for {
+		select {
+		case <-btn.closer.ChanClose():
+			log.Debug("blockTrackerNotifier.trackCheckPoints: closing channel")
+			return
+		case <-ctx.Done():
+			log.Debug("blockTrackerNotifier.trackCheckPoints: context done")
+			return
+		case <-timer.C:
+			latestCheckPoint, err := btn.rpcClient.SuiGetLatestCheckpointSequenceNumber(ctx)
+			if err != nil {
+				log.Error("blockTrackerNotifier.waitUntilStartCheckPoint", "error", err)
+				continue
+			}
+
+			if btn.startingCheckpoint == 0 {
+				btn.lastSentBatchCheckPoint = latestCheckPoint - btn.sampleSize
+				log.Info("SUI waitUntilStartCheckPoint finished, starting notifying with latest checkpoint",
+					"starting checkpoint", btn.lastSentBatchCheckPoint,
+					"latestCheckPoint", latestCheckPoint,
+				)
+				return
+			}
+
+			if latestCheckPoint >= btn.startingCheckpoint {
+				btn.lastSentBatchCheckPoint = btn.startingCheckpoint - btn.sampleSize
+				log.Info("SUI waitUntilStartCheckPoint finished",
+					"starting checkpoint", btn.lastSentBatchCheckPoint,
+					"latestCheckPoint", latestCheckPoint,
+				)
+				return
+			}
+
+			log.Debug("latest SUI checkpoint is less than starting checkpoint",
+				"latest checkpoint", latestCheckPoint,
+				"starting checkpoint", btn.startingCheckpoint,
+			)
+		}
 	}
 
+}
+
+func (btn *blockTrackerNotifier) trackCheckPoints(ctx context.Context) error {
 	log.Info("starting with latest checkpoint sequence", "number", btn.lastSentBatchCheckPoint)
 
 	timer := time.NewTicker(5 * time.Second)
@@ -221,19 +263,18 @@ func (btn *blockTrackerNotifier) getIncomingEvents(checkPoint models.CheckpointR
 func (btn *blockTrackerNotifier) processEvent(event models.SuiEventResponse) error {
 	parsed := event.ParsedJson
 	price, _ := parsed["price"].(string)
-
-	if len(price) > 5 { //&& price[0] == '4' { // && price[1] == '0' {
-	} else {
+	if !(len(price) > 5) { //&& price[0] == '4' { // && price[1] == '0' {
 		return nil
 	}
 
-	log.Debug("received incoming SUI event", "event seq", event.Id.EventSeq, "digest", event.Id.TxDigest)
+	txDigest := event.Id.TxDigest
+	log.Debug("received incoming SUI event", "event seq", event.Id.EventSeq, "digest", txDigest)
 
 	btn.mutex.Lock()
-	if _, found := btn.pendingEvents[event.Id.TxDigest]; !found {
-		btn.pendingEvents[event.Id.TxDigest] = []models.SuiEventResponse{event}
+	if _, found := btn.pendingEvents[txDigest]; !found {
+		btn.pendingEvents[txDigest] = []models.SuiEventResponse{event}
 	} else {
-		btn.pendingEvents[event.Id.TxDigest] = append(btn.pendingEvents[event.Id.TxDigest], event)
+		btn.pendingEvents[txDigest] = append(btn.pendingEvents[txDigest], event)
 	}
 	btn.mutex.Unlock()
 
@@ -241,11 +282,12 @@ func (btn *blockTrackerNotifier) processEvent(event models.SuiEventResponse) err
 }
 
 func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightCheckpoint) error {
-	for _, cp := range checkPoints {
-		log.Info("cp", "checkpoint", cp.Checkpoint, "len events", len(cp.Events))
-	}
-
 	for _, checkPoint := range checkPoints {
+		log.Info("sui tracker notifier: notifying incoming headers",
+			"checkpoint", checkPoint.Checkpoint,
+			"num events", len(checkPoint.Events),
+		)
+
 		incomingHeader, err := btn.incomingHeaderCreator.CreateIncomingHeader(checkPoint)
 		if err != nil {
 			return err
