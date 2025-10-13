@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -80,6 +81,25 @@ func startNotifier(ctx *cli.Context) error {
 		return fmt.Errorf("cannot create sovereign notifier, error: %w", err)
 	}
 
+	log.Info("starting...")
+
+	wsCtx, cancelFunc := context.WithCancel(context.Background())
+	go func() {
+		for {
+			select {
+			case <-wsCtx.Done():
+				log.Debug("ws client: context done, stopping")
+				return
+			default:
+				err = wsClient.Start(wsCtx)
+				if err != nil {
+					log.Error("ws client failed", "err", err)
+				}
+				time.Sleep(time.Second)
+			}
+		}
+	}()
+
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
 
@@ -88,6 +108,7 @@ func startNotifier(ctx *cli.Context) error {
 	<-interrupt
 	log.Info("closing app at user's signal")
 
+	cancelFunc()
 	wsClient.Close()
 
 	if withLogFile {
