@@ -398,6 +398,12 @@ func (btn *blockTrackerNotifier) RegisterHandler(handler sovereign.IncomingHeade
 }
 
 // Close will close the underlying mechanisms for rpc/ws tasks
-func (btn *blockTrackerNotifier) Close() {
+func (btn *blockTrackerNotifier) Close() error {
 	defer btn.closer.Close() // should always be last
+	return nil
+}
+
+// IsInterfaceNil checks if the underlying pointer is nil
+func (btn *blockTrackerNotifier) IsInterfaceNil() bool {
+	return btn == nil
 }
