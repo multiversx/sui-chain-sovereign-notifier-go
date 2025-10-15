@@ -46,6 +46,8 @@ type blockTrackerNotifier struct {
 	lastSentBatchCheckPoint uint64
 	startingCheckpoint      uint64
 	poolingTime             uint8
+
+	incomingNonce uint64
 }
 
 // NewSUITrackerNotifier creates a new sui checkpoint tracker that will notify incoming headers to sovereign chain
@@ -66,6 +68,7 @@ func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, 
 		startingCheckpoint:    args.StartingCheckpoint,
 		poolingTime:           args.PoolingTime,
 		subscribedEvents:      createSubScribedEvents(args.SubscribedEvents),
+		incomingNonce:         1,
 	}, nil
 }
 
@@ -337,8 +340,10 @@ func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightChe
 		log.Info("sui tracker notifier: notifying incoming headers",
 			"checkpoint", checkPoint.SequenceNumber,
 			"num events", len(checkPoint.Events),
+			"incoming nonce", btn.incomingNonce,
 		)
 
+		checkPoint.IncomingNonce = btn.incomingNonce
 		incomingHeader, err := btn.incomingHeaderCreator.CreateIncomingHeader(checkPoint)
 		if err != nil {
 			return err
@@ -348,6 +353,8 @@ func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightChe
 		if err != nil {
 			return err
 		}
+
+		btn.incomingNonce++
 	}
 
 	return nil

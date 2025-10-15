@@ -7,4 +7,7 @@ type SUILightCheckpoint struct {
 	SequenceNumber uint64                    `json:"sequenceNumber"`
 	Epoch          string                    `json:"epoch"`
 	Events         []models.SuiEventResponse `json:"events"`
+
+	// This represents a consecutive incoming nonce, that should have no gaps
+	IncomingNonce uint64 `json:"incomingNonce"`
 }

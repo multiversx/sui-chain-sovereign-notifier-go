@@ -28,7 +28,7 @@ func (ihc *incomingHeaderCreator) CreateIncomingHeader(checkPoint SUILightCheckp
 	return &sovereign.IncomingHeader{
 		SourceChainID:  dto.SUI,
 		Proof:          bytes,
-		Nonce:          checkPoint.SequenceNumber,
+		Nonce:          checkPoint.IncomingNonce,
 		IncomingEvents: createIncomingEvents(checkPoint.Events),
 	}, nil
 }
