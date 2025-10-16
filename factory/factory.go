@@ -5,8 +5,17 @@ import (
 	"github.com/multiversx/mx-chain-core-go/core/sovereign"
 	hashingFactory "github.com/multiversx/mx-chain-core-go/hashing/factory"
 	"github.com/multiversx/mx-chain-core-go/marshal/factory"
+	"github.com/multiversx/mx-chain-storage-go/leveldb"
 	"github.com/multiversx/sui-chain-sovereign-notifier-go/config"
 	"github.com/multiversx/sui-chain-sovereign-notifier-go/tracker"
+)
+
+const (
+	dbPath = "db/DBINonce"
+
+	batchDelaySeconds = 1
+	maxBatchSize      = 20000
+	maxOpenFiles      = 1
 )
 
 // CreateSUIClientNotifier creates a sui client notifier
@@ -26,6 +35,11 @@ func CreateSUIClientNotifier(cfg config.Config) (SUIClient, error) {
 		return nil, err
 	}
 
+	db, err := leveldb.NewDB(dbPath, batchDelaySeconds, maxBatchSize, maxOpenFiles)
+	if err != nil {
+		return nil, err
+	}
+
 	return tracker.NewSUITrackerNotifier(tracker.ArgsSuiTrackerNotifier{
 		PoolingTime:           cfg.PoolingTime,
 		BatchSize:             cfg.BatchSize,
@@ -35,5 +49,6 @@ func CreateSUIClientNotifier(cfg config.Config) (SUIClient, error) {
 		RPCClient:             sui.NewSuiClient(cfg.ClientConfig.RPCUrl),
 		IncomingHeaderCreator: tracker.NewIncomingHeadersCreator(),
 		HeadersNotifier:       headersNotifier,
+		NonceStorer:           db,
 	})
 }

@@ -30,3 +30,11 @@ type SUIRPCClient interface {
 	SuiGetLatestCheckpointSequenceNumber(ctx context.Context) (uint64, error)
 	SuiGetCheckpoints(ctx context.Context, req models.SuiGetCheckpointsRequest) (models.PaginatedCheckpointsResponse, error)
 }
+
+// Storer storer defines a db storer
+type Storer interface {
+	Put(key, val []byte) error
+	Get(key []byte) ([]byte, error)
+	Close() error
+	IsInterfaceNil() bool
+}
