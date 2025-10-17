@@ -28,3 +28,9 @@ subscribed_events =  [
 [client_config]
     rpc_url =  "https://fullnode.mainnet.sui.io" # "https://sui-mainnet-endpoint.blockvision.org"
     ws_url = "wss://rpc-mainnet.suiscan.xyz/websocket"
+
+[storer_db_config]
+    file_path = "SUINonceStorage"
+    batch_delay_seconds = 1
+    max_batch_size = 100
+    max_open_files = 10

@@ -10,14 +10,6 @@ import (
 	"github.com/multiversx/sui-chain-sovereign-notifier-go/tracker"
 )
 
-const (
-	dbPath = "db/DBINonce"
-
-	batchDelaySeconds = 1
-	maxBatchSize      = 20000
-	maxOpenFiles      = 1
-)
-
 // CreateSUIClientNotifier creates a sui client notifier
 func CreateSUIClientNotifier(cfg config.Config) (SUIClient, error) {
 	marshaller, err := factory.NewMarshalizer(cfg.MarshallerType)
@@ -35,7 +27,12 @@ func CreateSUIClientNotifier(cfg config.Config) (SUIClient, error) {
 		return nil, err
 	}
 
-	db, err := leveldb.NewDB(dbPath, batchDelaySeconds, maxBatchSize, maxOpenFiles)
+	db, err := leveldb.NewDB(
+		cfg.StorerDBConfig.FilePath,
+		cfg.StorerDBConfig.BatchDelaySeconds,
+		cfg.StorerDBConfig.MaxBatchSize,
+		cfg.StorerDBConfig.MaxOpenFiles,
+	)
 	if err != nil {
 		return nil, err
 	}

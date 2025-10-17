@@ -17,8 +17,7 @@ import (
 )
 
 const (
-	nonceKey      = "nonce"
-	checkPointKey = "checkpoint"
+	suiIncomingNonceKey = "suiIncomingNonce"
 )
 
 var log = logger.GetOrCreate("sui-tracker")
@@ -77,7 +76,7 @@ func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, 
 		startingCheckpoint:    args.StartingCheckpoint,
 		poolingTime:           args.PoolingTime,
 		subscribedEvents:      createSubScribedEvents(args.SubscribedEvents),
-		incomingNonce:         getUintValueFromStorage(args.NonceStorer, nonceKey),
+		incomingNonce:         getUintValueFromStorage(args.NonceStorer, suiIncomingNonceKey),
 		nonceStorer:           args.NonceStorer,
 	}, nil
 }
@@ -394,7 +393,7 @@ func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightChe
 func (btn *blockTrackerNotifier) saveNonce() error {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, btn.incomingNonce)
-	return btn.nonceStorer.Put([]byte(nonceKey), buf)
+	return btn.nonceStorer.Put([]byte(suiIncomingNonceKey), buf)
 }
 
 func (btn *blockTrackerNotifier) trackEvents(ctx context.Context) error {

@@ -11,6 +11,8 @@ type Config struct {
 
 	SubscribedEvents []SubscribedEvent `toml:"subscribed_events"`
 	ClientConfig     SUIClientConfig   `toml:"client_config"`
+
+	StorerDBConfig StorerDBConfig `toml:"storer_db_config"`
 }
 
 // SubscribedEvent holds subscribed SUI events to be received via ws
@@ -23,4 +25,12 @@ type SubscribedEvent struct {
 type SUIClientConfig struct {
 	RPCUrl string `toml:"rpc_url"`
 	WSUrl  string `toml:"ws_url"`
+}
+
+// StorerDBConfig holds storer config
+type StorerDBConfig struct {
+	FilePath          string `toml:"file_path"`
+	BatchDelaySeconds int    `toml:"batch_delay_seconds"`
+	MaxBatchSize      int    `toml:"max_batch_size"`
+	MaxOpenFiles      int    `toml:"max_open_files"`
 }
