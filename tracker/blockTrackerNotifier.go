@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 	"sync"
@@ -13,6 +14,10 @@ import (
 	"github.com/multiversx/mx-chain-core-go/core/sovereign"
 	logger "github.com/multiversx/mx-chain-logger-go"
 	"github.com/multiversx/sui-chain-sovereign-notifier-go/config"
+)
+
+const (
+	suiIncomingNonceKey = "suiIncomingNonce"
 )
 
 var log = logger.GetOrCreate("sui-tracker")
@@ -29,6 +34,8 @@ type ArgsSuiTrackerNotifier struct {
 	RPCClient             SUIRPCClient
 	IncomingHeaderCreator IncomingHeaderCreator
 	HeadersNotifier       IncomingHeadersNotifierHandler
+
+	NonceStorer Storer
 }
 
 type blockTrackerNotifier struct {
@@ -46,6 +53,9 @@ type blockTrackerNotifier struct {
 	lastSentBatchCheckPoint uint64
 	startingCheckpoint      uint64
 	poolingTime             uint8
+
+	incomingNonce uint64
+	nonceStorer   Storer
 }
 
 // NewSUITrackerNotifier creates a new sui checkpoint tracker that will notify incoming headers to sovereign chain
@@ -66,6 +76,8 @@ func NewSUITrackerNotifier(args ArgsSuiTrackerNotifier) (*blockTrackerNotifier, 
 		startingCheckpoint:    args.StartingCheckpoint,
 		poolingTime:           args.PoolingTime,
 		subscribedEvents:      createSubScribedEvents(args.SubscribedEvents),
+		incomingNonce:         getUintValueFromStorage(args.NonceStorer, suiIncomingNonceKey),
+		nonceStorer:           args.NonceStorer,
 	}, nil
 }
 
@@ -88,6 +100,9 @@ func checkArgs(args ArgsSuiTrackerNotifier) error {
 	if args.HeadersNotifier == nil {
 		return errNilHeadersNotifier
 	}
+	if args.NonceStorer == nil {
+		return errNilStorer
+	}
 
 	return nil
 }
@@ -98,6 +113,19 @@ func createSubScribedEvents(subscribedEvents []config.SubscribedEvent) map[strin
 		ret[event.EventType] = event.Value
 	}
 	return ret
+}
+
+func getUintValueFromStorage(db Storer, key string) uint64 {
+	storedValue, _ := db.Get([]byte(key))
+	var val uint64
+	if storedValue != nil {
+		val = binary.BigEndian.Uint64(storedValue)
+	} else {
+		val = 1
+	}
+
+	log.Debug("sui notifier: getUintValueFromStorage", "key", key, "value", val)
+	return val
 }
 
 // Start launches the main tracking loop responsible for monitoring Sui checkpoints
@@ -337,8 +365,10 @@ func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightChe
 		log.Info("sui tracker notifier: notifying incoming headers",
 			"checkpoint", checkPoint.SequenceNumber,
 			"num events", len(checkPoint.Events),
+			"incoming nonce", btn.incomingNonce,
 		)
 
+		checkPoint.IncomingNonce = btn.incomingNonce
 		incomingHeader, err := btn.incomingHeaderCreator.CreateIncomingHeader(checkPoint)
 		if err != nil {
 			return err
@@ -348,9 +378,22 @@ func (btn *blockTrackerNotifier) notifyIncomingHeaders(checkPoints []SUILightChe
 		if err != nil {
 			return err
 		}
+
+		btn.incomingNonce++
+
+		err = btn.saveNonce()
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func (btn *blockTrackerNotifier) saveNonce() error {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, btn.incomingNonce)
+	return btn.nonceStorer.Put([]byte(suiIncomingNonceKey), buf)
 }
 
 func (btn *blockTrackerNotifier) trackEvents(ctx context.Context) error {
@@ -400,7 +443,7 @@ func (btn *blockTrackerNotifier) RegisterHandler(handler sovereign.IncomingHeade
 // Close will close the underlying mechanisms for rpc/ws tasks
 func (btn *blockTrackerNotifier) Close() error {
 	defer btn.closer.Close() // should always be last
-	return nil
+	return btn.nonceStorer.Close()
 }
 
 // IsInterfaceNil checks if the underlying pointer is nil
